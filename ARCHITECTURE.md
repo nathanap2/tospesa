@@ -18,19 +18,29 @@ signées et portables, pour garder la décentralisation possible plus tard.
   entité l'emporte. Deux copies qui ont reçu les mêmes notes, par n'importe
   quels chemins, sont identiques. C'est la propriété de base de toute
   synchronisation entre pairs.
+- **Synchronisation** (`Store.pull`) : par dates, limitée au voisinage de
+  confiance, les auteurs les plus proches d'abord (voir plus bas).
 - **Échange manuel** (`tospesa/cli.py`, `export` / `import`) : une
-  réplication par fichier, façon Scuttlebutt hors ligne.
+  réplication par fichier, façon Scuttlebutt hors ligne. Un fichier importé
+  est traité comme un pair : on n'en tire que son voisinage de confiance.
 
-## Prochaine étape envisagée : la synchronisation entre pairs
+## Synchronisation entre pairs
 
-- *Numéro de séquence par auteur.* Chaque auteur numérote ses notes, comme
-  les journaux de Scuttlebutt. Deux avantages :
-  - synchroniser devient « donne-moi les notes de X après le numéro n », ce
-    qui est léger ;
-  - l'**omission devient détectable** : un trou dans la séquence montre qu'un
-    pair a retenu des notes.
-- *Périmètre de réplication.* Les auteurs à répliquer sont ceux du voisinage
-  de confiance, calculé par le moteur.
+Elle fonctionne « au mieux » : une note manquante rend un score un peu moins
+précis, ce n'est pas une catastrophe. On ne cherche donc pas de garantie de
+complétude coûteuse (numéros de séquence, historique complet).
+
+- *Par dates.* « J'ai les notes de Thomas jusqu'à telle date, donne-moi les
+  plus récentes. » On n'échange qu'une date par auteur, puis seulement les
+  notes nouvelles. Une note ancienne arrivée en retard chez un pair peut être
+  ratée : c'est acceptable.
+- *Périmètre.* On ne réplique que son voisinage de confiance : soi-même,
+  puis les entités notées positivement, de proche en proche. Les notes
+  d'inconnus ne sont jamais copiées, ce qui contient aussi l'injection de
+  données.
+- *Priorité.* Les auteurs les plus proches en confiance sont envoyés en
+  premier, puisque ce sont eux qui pèsent le plus. Une connexion courte
+  récupère d'abord ce qui compte.
 
 ## Deux couches distinctes
 

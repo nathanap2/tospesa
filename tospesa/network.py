@@ -79,9 +79,10 @@ class Network:
             opinions = updated
         raise RuntimeError(f"les avis sur {entity!r} ne convergent pas")
 
-    def nearby_raters(self, viewer: str, entity: str) -> Iterator[tuple[str, int]]:
-        """Auteurs du réseau de confiance du lecteur qui ont noté l'entité, avec
-        leur distance en pas, du plus proche au plus lointain."""
+    def neighborhood(self, viewer: str) -> Iterator[tuple[str, int]]:
+        """Entités notées positivement de proche en proche depuis le lecteur,
+        avec leur distance en pas, des plus proches aux plus lointaines. Seuls
+        les auteurs connus ont des contacts à explorer."""
         seen = {viewer}
         frontier = [viewer]
         distance = 0
@@ -90,12 +91,18 @@ class Network:
             next_frontier = []
             for author in frontier:
                 for contact, (trust, _) in self._notes.get(author, {}).items():
-                    if trust > 0 and contact in self._notes and contact not in seen:
+                    if trust > 0 and contact not in seen:
                         seen.add(contact)
                         next_frontier.append(contact)
-                        if entity in self._notes[contact]:
-                            yield contact, distance
+                        yield contact, distance
             frontier = next_frontier
+
+    def nearby_raters(self, viewer: str, entity: str) -> Iterator[tuple[str, int]]:
+        """Auteurs du réseau de confiance du lecteur qui ont noté l'entité, avec
+        leur distance en pas, du plus proche au plus lointain."""
+        for author, distance in self.neighborhood(viewer):
+            if entity in self._notes.get(author, {}):
+                yield author, distance
 
     def score(self, viewer: str, entity: str) -> float:
         value, _ = self.opinions(entity, viewer).get(viewer, (0.0, 0.0))

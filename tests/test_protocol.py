@@ -8,6 +8,7 @@ from tospesa.protocol import Identity, entity_id
 from tospesa.store import Store
 
 BOOK = "Le Petit Prince"
+FILM = "Metropolis"
 
 
 def run(capsys, home, *args):
@@ -80,3 +81,48 @@ def test_merging_notes_is_order_independent():
         for note in order:
             store.add(note)
         assert store.network().score(bob.id, entity_id(BOOK)) == 0
+
+
+def test_sync_replicates_the_trust_neighborhood():
+    # Bob ne fait confiance qu'à Alice. En se synchronisant avec un pair, il
+    # récupère les notes d'Alice, puis celles des gens en qui Alice a
+    # confiance, mais jamais celles d'un inconnu. Un second passage n'apporte
+    # plus rien.
+    alice, bob, carol, mallory = (Identity.generate() for _ in range(4))
+    peer = Store()
+    for note in [
+        alice.sign_note(entity_id(BOOK), 1, timestamp=1),
+        alice.sign_note(carol.id, 1, timestamp=1),
+        carol.sign_note(entity_id(FILM), -1, timestamp=1),
+        mallory.sign_note(entity_id(BOOK), -1, timestamp=1),
+    ]:
+        peer.add(note)
+    mine = Store()
+    mine.add(bob.sign_note(alice.id, 1, timestamp=1))
+
+    assert mine.pull(peer, bob.id) == 3
+    assert {note.author for note in mine} == {bob.public, alice.public, carol.public}
+    assert mine.network().score(bob.id, entity_id(BOOK)) == 1
+    assert mine.network().score(bob.id, entity_id(FILM)) == -1
+    assert mine.pull(peer, bob.id) == 0
+
+
+def test_sync_sends_closest_authors_first():
+    # Avec une connexion qui ne laisse passer qu'une note, Bob reçoit celle
+    # d'Alice (à 1 pas) plutôt que celle de Carol (à 2 pas).
+    alice, bob, carol = (Identity.generate() for _ in range(3))
+    trust_carol = alice.sign_note(carol.id, 1, timestamp=1)
+    peer = Store()
+    for note in [
+        trust_carol,
+        carol.sign_note(entity_id(FILM), -1, timestamp=2),
+        alice.sign_note(entity_id(BOOK), 1, timestamp=2),
+    ]:
+        peer.add(note)
+    mine = Store()
+    mine.add(bob.sign_note(alice.id, 1, timestamp=1))
+    mine.add(trust_carol)
+
+    assert mine.pull(peer, bob.id, limit=1) == 1
+    assert mine.network().score(bob.id, entity_id(BOOK)) == 1
+    assert mine.network().score(bob.id, entity_id(FILM)) == 0

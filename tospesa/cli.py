@@ -1,7 +1,8 @@
 """Interface minimale en ligne de commande.
 
 Chaque utilisateur a un dossier (--home) qui contient sa clé privée et sa
-copie locale des notes : les siennes et celles qu'il a importées. Les
+copie locale des notes : les siennes et celles de son voisinage de confiance
+qu'il a importées (un fichier importé est traité comme un pair). Les
 chaînes passées en argument sont hachées telles quelles ; pour noter une
 personne, on passe sa clé publique.
 """
@@ -62,15 +63,16 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "export":
         store.save(args.file)
     elif args.command == "import":
-        added = rejected = 0
+        peer, rejected = Store(), 0
         for line in args.file.read_text().splitlines():
             try:
-                added += store.add(Note.from_json(line))
+                peer.add(Note.from_json(line))
             except InvalidNote as error:
                 rejected += 1
                 print(f"note rejetée : {error}")
+        added = store.pull(peer, me.id)
         store.save(notes_file)
-        print(f"{added} notes nouvelles, {rejected} rejetées")
+        print(f"{added} notes nouvelles de ton réseau, {rejected} rejetées")
 
 
 if __name__ == "__main__":
