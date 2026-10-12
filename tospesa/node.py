@@ -389,20 +389,18 @@ class Home:
     # --- invitations ----------------------------------------------------
 
     def invitation(self) -> str:
-        """Code à envoyer à un ami : sa clé, son nom, et les adresses où le
-        joindre (son nœud, et les pairs qu'il utilise)."""
+        """Code à envoyer à un ami : sa clé et les adresses où le joindre (son
+        nœud, et les pairs qu'il utilise)."""
         me = self.identity()
         config = self.config()
         addresses = [*config["addresses"], *config["candidates"], *config["peers"]]
-        payload = {"key": me.public, "name": config.get("name"),
-                   "addresses": list(dict.fromkeys(addresses))}
+        payload = {"key": me.public, "addresses": list(dict.fromkeys(addresses))}
         encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
         return INVITATION_PREFIX + encoded.rstrip("=")
 
-    def join(self, invitation: str, name: str | None = None) -> str:
-        """Accepte une invitation : ajoute l'ami au carnet, lui fait
-        confiance, et prend ses adresses comme points d'entrée. Renvoie le nom
-        sous lequel il est enregistré."""
+    def join(self, invitation: str, name: str) -> None:
+        """Accepte une invitation : ajoute l'ami au carnet sous ce nom, lui
+        fait confiance, et prend ses adresses comme points d'entrée."""
         if not invitation.startswith(INVITATION_PREFIX):
             raise SystemExit("ce n'est pas une invitation tospesa")
         encoded = invitation[len(INVITATION_PREFIX):]
@@ -413,9 +411,6 @@ class Home:
                 parse_address(address)
         except (ValueError, KeyError, TypeError, InvalidRecord) as error:
             raise SystemExit(f"invitation illisible : {error}") from error
-        name = name or payload.get("name")
-        if not name:
-            raise SystemExit("l'invitation ne donne pas de nom : préciser --as NOM")
         if key == self.identity().public:
             raise SystemExit("c'est ta propre invitation")
         self.add_contact(name, key)
@@ -424,7 +419,6 @@ class Home:
             if address not in own:
                 self.add_peer(address)
         self.rate("@" + name, 1)
-        return name
 
     def rate(self, entity: str, value: float | None, weight: float = 1.0) -> None:
         """Note (ou retire sa note, si value est None) l'entité désignée par

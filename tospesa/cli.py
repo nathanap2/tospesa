@@ -23,13 +23,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--home", type=Path, default=Path.home() / ".tospesa",
                         help="dossier de l'utilisateur (défaut : ~/.tospesa)")
     commands = parser.add_subparsers(dest="command", required=True)
-    init = commands.add_parser("init", help="créer sa clé")
-    init.add_argument("--name", help="nom proposé à ceux que tu invites")
+    commands.add_parser("init", help="créer sa clé")
     commands.add_parser("id", help="afficher sa clé publique")
     commands.add_parser("invite", help="afficher un code d'invitation à envoyer à un ami")
     join = commands.add_parser("join", help="accepter l'invitation d'un ami")
     join.add_argument("invitation")
-    join.add_argument("--as", dest="name", help="nom sous lequel l'enregistrer")
+    join.add_argument("name", help="nom sous lequel enregistrer cet ami")
     commands.add_parser("contacts", help="afficher son carnet de contacts")
     rate = commands.add_parser("rate", help="noter une entité (de -1 à 1)")
     rate.add_argument("entity", help="@nom, URL, ou toute autre chaîne")
@@ -121,18 +120,15 @@ def main(argv: list[str] | None = None) -> None:
             closed = " et port refermé sur la box" if node.stop() else ""
             print(f"{'relais' if node.relay else 'nœud'} arrêté{closed}.", flush=True)
     elif args.command == "init":
-        identity = home.create_identity()
-        if args.name:
-            home.update_config(name=args.name)
-        print(identity.public)
+        print(home.create_identity().public)
     elif args.command == "id":
         print(home.identity().public)
     elif args.command == "invite":
         print(home.invitation())
     elif args.command == "join":
-        name = home.join(args.invitation, args.name)
-        print(f"{name} est dans tes contacts (@{name}) et tu lui fais confiance.")
-        print(f"pour que {name} reçoive aussi tes notes, envoie-lui ton invitation "
+        home.join(args.invitation, args.name)
+        print(f"@{args.name} est dans tes contacts et tu lui fais confiance.")
+        print(f"pour que {args.name} reçoive aussi tes notes, envoie-lui ton invitation "
               "(tospesa invite).")
     elif args.command == "contacts":
         for name, key in sorted(home.contacts().items()):

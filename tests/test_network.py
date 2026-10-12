@@ -285,11 +285,11 @@ def test_friends_join_each_other_with_invitations(capsys, start, tmp_path):
     # et lui renvoie la sienne. Sans rien configurer d'autre, chacun voit
     # ensuite l'avis de l'autre, et désigne l'autre par son nom.
     alice, bob = tmp_path / "alice", tmp_path / "bob"
-    run(capsys, alice, "init", "--name", "Alice")
-    run(capsys, bob, "init", "--name", "Bob")
+    run(capsys, alice, "init")
+    run(capsys, bob, "init")
     start("alice")
-    run(capsys, bob, "join", run(capsys, alice, "invite"))
-    run(capsys, alice, "join", run(capsys, bob, "invite"))
+    run(capsys, bob, "join", run(capsys, alice, "invite"), "Alice")
+    run(capsys, alice, "join", run(capsys, bob, "invite"), "Bob")
 
     run(capsys, alice, "rate", BOOK, "1")
     assert score(capsys, bob, BOOK) == 1  # Bob interroge le nœud d'Alice

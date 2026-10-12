@@ -41,10 +41,11 @@ encore ouvertes. Les features utilisateur sont dans `FEATURES.md`.
   (`/probe`), uniquement à l'adresse IP d'où vient la demande, pour ne pas
   servir à sonder des machines tierces. Une adresse donnée explicitement
   (`--public-host`) est annoncée telle quelle.
-- **Invitations** (`tospesa invite` / `join`). Le code contient la clé, le nom
-  proposé et les adresses où joindre l'ami (son nœud, ses pairs) : c'est
+- **Invitations** (`tospesa invite` / `join`). Le code contient la clé et
+  les adresses où joindre l'ami (son nœud, ses pairs) : c'est
   l'équivalent des nœuds d'amorçage de BitTorrent. L'accepter ajoute l'ami au
-  carnet de contacts local (jamais publié), lui fait confiance et prend ses
+  carnet de contacts local (jamais publié) sous le nom choisi par celui qui
+  accepte, lui fait confiance et prend ses
   adresses comme points d'entrée.
 - **Synchronisation** (`tospesa sync`, et périodiquement dans le nœud
   personnel). On joint tous les pairs connus : ceux de sa configuration

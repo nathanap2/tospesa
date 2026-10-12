@@ -24,7 +24,7 @@ uv tool install git+https://github.com/nathanap2/tospesa
 ## Démarrer
 
 ```sh
-tospesa init --name Alice     # crée ta clé ; le nom est proposé à ceux que tu invites
+tospesa init                  # crée ta clé
 tospesa node                  # fait tourner ton nœud ; laisse ce terminal ouvert
 ```
 
@@ -40,11 +40,11 @@ Dans un autre terminal :
 
 ```sh
 tospesa invite                # affiche un code « tospesa:… » à envoyer à un ami
-tospesa join tospesa:…        # accepte le code reçu d'un ami
+tospesa join tospesa:… Bob    # accepte le code reçu de Bob
 ```
 
-Accepter une invitation ajoute l'ami à ton carnet de contacts (tu peux ensuite
-le désigner par `@son-nom`), lui fait confiance, et te donne un point d'entrée
+Accepter une invitation ajoute l'ami à ton carnet de contacts sous le nom que
+tu choisis (tu peux ensuite le désigner par `@Bob`), lui fait confiance, et te donne un point d'entrée
 dans le réseau. **Échangez vos invitations dans les deux sens** : ton nœud
 n'accepte que les notes des gens de ton réseau de confiance.
 
