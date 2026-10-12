@@ -8,6 +8,30 @@ réseau. Les features utilisateur sont dans `FEATURES.md`.
 On commence par du centralisé. Les notes sont conçues comme des déclarations
 signées et portables, pour garder la décentralisation possible plus tard.
 
+## Ce qui existe déjà (prototype)
+
+- **Notes signées** (`tospesa/protocol.py`) : Ed25519, sur l'empreinte SHA-256
+  de l'entité. Une note se vérifie seule, donc elle peut transiter par
+  n'importe quel pair.
+- **Copie locale** (`tospesa/store.py`) : la fusion ne dépend ni de l'ordre
+  d'arrivée ni des doublons. La plus récente note de chaque auteur sur chaque
+  entité l'emporte. Deux copies qui ont reçu les mêmes notes, par n'importe
+  quels chemins, sont identiques. C'est la propriété de base de toute
+  synchronisation entre pairs.
+- **Échange manuel** (`tospesa/cli.py`, `export` / `import`) : une
+  réplication par fichier, façon Scuttlebutt hors ligne.
+
+## Prochaine étape envisagée : la synchronisation entre pairs
+
+- *Numéro de séquence par auteur.* Chaque auteur numérote ses notes, comme
+  les journaux de Scuttlebutt. Deux avantages :
+  - synchroniser devient « donne-moi les notes de X après le numéro n », ce
+    qui est léger ;
+  - l'**omission devient détectable** : un trou dans la séquence montre qu'un
+    pair a retenu des notes.
+- *Périmètre de réplication.* Les auteurs à répliquer sont ceux du voisinage
+  de confiance, calculé par le moteur.
+
 ## Deux couches distinctes
 
 - **Transport** : trouver et récupérer des notes (« quelle note tel

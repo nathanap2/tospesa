@@ -2,6 +2,9 @@
 name = "tospesa"
 version = "0.0.1"
 requires-python = ">=3.12"
+dependencies = [
+    "cryptography>=50.0.2",
+]
 
 [dependency-groups]
 dev = ["pytest"]
