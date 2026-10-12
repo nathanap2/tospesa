@@ -18,7 +18,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh        # Linux, macOS
 Puis :
 
 ```sh
-uv tool install git+<adresse du dépôt>
+uv tool install git+https://github.com/nathanap2/tospesa
 ```
 
 ## Démarrer
