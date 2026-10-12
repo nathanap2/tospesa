@@ -156,10 +156,3 @@ class Network:
                         next_frontier.append(contact)
                         yield contact, distance, author
             frontier = next_frontier
-
-    def nearby_raters(self, viewer: str, entity: str) -> Iterator[tuple[str, int]]:
-        """Utilisateurs du réseau de confiance du lecteur qui ont noté
-        l'entité, avec leur distance en pas, du plus proche au plus lointain."""
-        for author, distance, _ in self.neighborhood(viewer):
-            if entity in self._notes.get(author, {}):
-                yield author, distance

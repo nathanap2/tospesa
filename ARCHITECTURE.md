@@ -68,8 +68,6 @@ encore ouvertes. Les features utilisateur sont dans `FEATURES.md`.
   qu'on l'ait demandé, et écarte les enregistrements invalides. Un pair
   malveillant ne peut donc ni injecter de notes d'inconnus dans la copie
   locale, ni falsifier de notes. Il peut seulement en retenir.
-- **Échange manuel** (`export` / `import`) : une réplication par fichier. Un
-  fichier importé est traité comme un pair.
 
 ### Travail restant
 - Une machine derrière une box sans UPnP, et sans IPv6 joignable, reste
@@ -98,9 +96,6 @@ complétude coûteuse (numéros de séquence, historique complet).
   puis les entités notées positivement, de proche en proche. Les notes
   d'inconnus ne sont jamais copiées, ce qui contient aussi l'injection de
   données.
-- *Priorité.* Les auteurs les plus proches en confiance sont envoyés en
-  premier, puisque ce sont eux qui pèsent le plus. Une connexion courte
-  récupère d'abord ce qui compte.
 
 ## Deux couches distinctes
 

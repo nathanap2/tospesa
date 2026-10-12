@@ -10,8 +10,8 @@ diffère.
 
   POST /heads {"authors": [...]}                    -> {"heads": [want, ...]}
   POST /push  {"records": [...]}                    -> {"added", "refused", "rejected"}
-  POST /pull  {"wants": [want, ...], "limit": n}    -> {"records": [...]}
-  POST /trace {"viewer", "entity", "limit": n}      -> {"records": [...]}
+  POST /pull  {"wants": [want, ...]}                -> {"records": [...]}
+  POST /trace {"viewer", "entity"}                  -> {"records": [...]}
 
 Les échanges sont chiffrés en TLS 1.3, avec un certificat dérivé de la clé du
 nœud. L'adresse d'un nœud contient cette clé, et le client vérifie que le nœud
@@ -58,6 +58,7 @@ from tospesa import upnp
 from tospesa.store import Store, Want
 
 TIMEOUT = 5.0
+SYNC_INTERVAL = 60.0  # secondes entre deux synchronisations du nœud
 MAX_BODY = 16 * 1024 * 1024
 
 
@@ -140,10 +141,10 @@ def make_server(
 
     def pull(body):
         wants = [tuple(want) for want in body["wants"]]
-        return {"records": _dump(store.records_for(wants, body["limit"]))}
+        return {"records": _dump(store.records_for(wants))}
 
     def trace(body):
-        notes = store.trace(body["viewer"], body["entity"], body["limit"])
+        notes = store.trace(body["viewer"], body["entity"])
         return {"records": _dump(notes)}
 
     routes = {"/heads": heads, "/push": push, "/pull": pull, "/trace": trace}
@@ -270,12 +271,12 @@ class RemoteNode:
     def push(self, records: Iterable[Record]) -> dict:
         return self._post("/push", {"records": _dump(records)})
 
-    def records_for(self, wants: Iterable[Want], limit: int | None = None) -> list[Record]:
-        reply = self._post("/pull", {"wants": list(wants), "limit": limit})
+    def records_for(self, wants: Iterable[Want]) -> list[Record]:
+        reply = self._post("/pull", {"wants": list(wants)})
         return self._records(reply["records"])
 
-    def trace(self, viewer: str, entity: str, limit: int | None = None) -> list[Record]:
-        reply = self._post("/trace", {"viewer": viewer, "entity": entity, "limit": limit})
+    def trace(self, viewer: str, entity: str) -> list[Record]:
+        reply = self._post("/trace", {"viewer": viewer, "entity": entity})
         return self._records(reply["records"])
 
 
@@ -552,7 +553,7 @@ def sync(home: Home) -> SyncReport:
     return _visit_peers(home, me, lambda remote: home.store.pull(remote, me.id))
 
 
-def lookup(home: Home, target: str, limit: int | None = None) -> SyncReport:
+def lookup(home: Home, target: str) -> SyncReport:
     """Recherche ciblée : demande à chaque pair joignable qui, dans son réseau
     de confiance, a noté l'entité (son empreinte), et récupère les chaînes de
     notes correspondantes."""
@@ -560,7 +561,7 @@ def lookup(home: Home, target: str, limit: int | None = None) -> SyncReport:
 
     def exchange(remote: RemoteNode) -> int:
         found = Store()
-        for note in remote.trace(me.id, target, limit):
+        for note in remote.trace(me.id, target):
             found.add(note)
         return home.store.pull(found, me.id)
 
@@ -598,7 +599,7 @@ class Node:
       pairs."""
 
     def __init__(self, home: Home, host: str = "127.0.0.1", port: int = 0, *,
-                 public_host: str | None = None, public_port: int | None = None,
+                 public_host: str | None = None,
                  relay: bool = False,
                  find_gateway: Callable[[], upnp.Gateway] = upnp.discover,
                  find_ipv6: Callable[[], str | None] = global_ipv6):
@@ -618,13 +619,11 @@ class Node:
             home.store, identity, home.certificate(), host, port, accepted
         )
         self.port = self.server.server_port
-        self._public_port = public_port or self.port
         self._find_gateway, self._find_ipv6 = find_gateway, find_ipv6
         self._gateway: upnp.Gateway | None = None
         self.upnp_error: str | None = None
         if public_host or host not in _WILDCARDS:
-            self._given = [format_address(identity.public, public_host or host,
-                                          self._public_port)]
+            self._given = [format_address(identity.public, public_host or host, self.port)]
         else:
             self._given = []
         self.refresh_reachability()
@@ -685,7 +684,7 @@ class Node:
             return False  # la redirection expirera d'elle-même (bail d'une heure)
         return True
 
-    def run_forever(self, interval: float, report: Callable[[SyncReport], None]) -> None:
+    def run_forever(self, report: Callable[[SyncReport], None]) -> None:
         self.start()
         # Copie distincte de celle que sert le serveur : elles partagent le
         # journal et relisent chacune ce que l'autre y ajoute.
@@ -694,4 +693,4 @@ class Node:
             self.refresh_reachability()
             if not self.relay:
                 report(sync(home))
-            time.sleep(interval)
+            time.sleep(SYNC_INTERVAL)

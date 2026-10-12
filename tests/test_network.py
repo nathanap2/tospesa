@@ -3,13 +3,14 @@
 import re
 import socket
 import threading
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
 from tospesa import upnp
 
-from tospesa.node import Home, Node, sync
+from tospesa.node import Home, Node, RemoteNode, sync
 from tospesa.protocol import entity_id, format_address, parse_address
 from test_protocol import BOOK, FILM, run, score
 
@@ -57,7 +58,8 @@ def authors(home):
 def test_notes_travel_through_a_relay(capsys, start, user):
     # Alice et Mallory publient leur avis sur le livre via un relais. Bob ne
     # fait confiance qu'à Alice : après synchronisation, il a son avis à elle,
-    # et celui de Mallory, une inconnue, ne compte pas.
+    # et celui de Mallory, une inconnue, ne compte pas. Le relais n'a reçu
+    # que l'empreinte du livre, jamais son titre.
     relay = start("relay", relay=True)
     (alice, alice_key), (bob, _), (mallory, _) = user("alice"), user("bob"), user("mallory")
     run(capsys, alice, "rate", BOOK, "1")
@@ -71,6 +73,7 @@ def test_notes_travel_through_a_relay(capsys, start, user):
     assert local_score(capsys, bob, BOOK) == 0
     run(capsys, bob, "sync")
     assert local_score(capsys, bob, BOOK) == 1
+    assert BOOK not in (relay.home.path / "records.jsonl").read_text()
 
 
 def test_contacts_keep_backup_copies(capsys, start, user):
@@ -131,6 +134,20 @@ def test_personal_node_only_accepts_its_trust_neighborhood(capsys, start, user):
     assert alice_key in authors(bob)
     assert mallory_key not in authors(bob)
     assert local_score(capsys, bob, BOOK) == 1
+
+
+def test_forged_notes_are_rejected(capsys, start, user):
+    # Une note d'Alice modifiée après sa signature (le livre passe de 1 à -1)
+    # est rejetée par le nœud de Bob, bien qu'il fasse confiance à Alice.
+    (alice, alice_key), (bob, _) = user("alice"), user("bob")
+    run(capsys, bob, "rate", alice_key, "1")
+    bob_node = start("bob")
+    run(capsys, alice, "rate", BOOK, "1")
+    note = Home(alice).store.note(entity_id(alice_key), entity_id(BOOK))
+
+    reply = RemoteNode(bob_node.address).push([replace(note, value=-1)])
+    assert reply["rejected"] == 1
+    assert local_score(capsys, bob, BOOK) == 0
 
 
 def test_rare_entity_found_by_targeted_search(capsys, start, user):

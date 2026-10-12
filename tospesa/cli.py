@@ -14,8 +14,6 @@ from pathlib import Path
 
 from tospesa.network import Opinion
 from tospesa.node import Home, Node, SyncReport, lookup, sync
-from tospesa.protocol import InvalidRecord, record_from_json
-from tospesa.store import Store
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -39,11 +37,8 @@ def _parser() -> argparse.ArgumentParser:
     score = commands.add_parser("score", help="consulter son score")
     score.add_argument("entity", help="@nom, URL, ou toute autre chaîne")
     score.add_argument("--local", action="store_true", help="sans interroger le réseau")
-    score.add_argument("--limit", type=int, default=None, help="nombre de notateurs cherchés")
-    commands.add_parser("export", help="exporter sa copie").add_argument("file", type=Path)
-    commands.add_parser("import", help="importer un fichier").add_argument("file", type=Path)
     peers = commands.add_parser("peers", help="pairs connus (nœuds, relais)")
-    peers.add_argument("action", nargs="?", choices=["add", "remove"])
+    peers.add_argument("action", nargs="?", choices=["add"])
     peers.add_argument("address", nargs="?", help="tsp://<clé>@hôte:port")
     commands.add_parser("sync", help="se synchroniser avec ses pairs")
     for name, label in (("node", "son nœud"), ("relay", "un relais")):
@@ -52,9 +47,6 @@ def _parser() -> argparse.ArgumentParser:
                             help="interface d'écoute (défaut : toutes, IPv4 et IPv6)")
         server.add_argument("--port", type=int, default=8470)
         server.add_argument("--public-host", help="hôte par lequel les autres le joignent")
-        server.add_argument("--public-port", type=int, help="port par lequel les autres le joignent")
-        server.add_argument("--interval", type=float, default=60.0,
-                            help="secondes entre deux synchronisations")
     return parser
 
 
@@ -105,7 +97,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.command == "relay" and not home.has_identity():
             home.create_identity()
         node = Node(home, args.host, args.port, public_host=args.public_host,
-                    public_port=args.public_port, relay=args.command == "relay")
+                    relay=args.command == "relay")
         _print_node_start(node)
         # Fermer le terminal (SIGHUP) ou l'arrêt par le système (SIGTERM) doit
         # arrêter le nœud aussi proprement qu'un Ctrl+C, port de la box compris.
@@ -113,7 +105,7 @@ def main(argv: list[str] | None = None) -> None:
             if hasattr(signal, name):
                 signal.signal(getattr(signal, name), _interrupt)
         try:
-            node.run_forever(args.interval, _print_report)
+            node.run_forever(_print_report)
         except KeyboardInterrupt:
             pass
         finally:
@@ -141,29 +133,13 @@ def main(argv: list[str] | None = None) -> None:
         me = home.identity()
         target = home.target(args.entity)
         _print_opinion(home.store.network().opinion(me.id, target), "copie locale")
-        if not args.local and lookup(home, target, args.limit).reached:
+        if not args.local and lookup(home, target).reached:
             _print_opinion(home.store.network().opinion(me.id, target), "réseau")
-    elif args.command == "export":
-        home.store.save(args.file)
-    elif args.command == "import":
-        me = home.identity()
-        peer, rejected = Store(), 0
-        for line in args.file.read_text().splitlines():
-            try:
-                peer.add(record_from_json(line))
-            except InvalidRecord as error:
-                rejected += 1
-                print(f"enregistrement rejeté : {error}")
-        added = home.store.pull(peer, me.id)
-        print(f"{added} enregistrements nouveaux de ton réseau, {rejected} rejetés")
     elif args.command == "peers":
-        config = home.config()
         if args.action == "add":
             home.add_peer(args.address)
-        elif args.action == "remove":
-            home.update_config(peers=[a for a in config["peers"] if a != args.address])
         else:
-            print("\n".join(config["peers"]))
+            print("\n".join(home.config()["peers"]))
     elif args.command == "sync":
         home.identity()
         _print_report(sync(home))

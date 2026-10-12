@@ -126,22 +126,6 @@ def test_no_echo_toward_viewer():
     assert build(reciprocal=True) == pytest.approx(build(reciprocal=False))
 
 
-def test_find_nearby_raters_from_closest_to_farthest():
-    # Pour l'onboarding : trouver les contacts de contacts (de contacts...) qui
-    # ont noté l'entité que je suis en train de noter, les plus proches
-    # d'abord. Ni les inconnus ni ceux dont je me méfie n'y figurent.
-    net = Network()
-    net.rate("me", "a", 1)
-    net.rate("a", "b", 1)
-    net.rate("b", "c", 1)
-    net.rate("b", "book", 1)
-    net.rate("c", "book", -1)
-    net.rate("stranger", "book", 1)
-    net.rate("me", "d", -1)
-    net.rate("d", "book", 1)
-    assert list(net.nearby_raters("me", "book")) == [("b", 2), ("c", 3)]
-
-
 def test_weight_scales_how_much_a_note_counts():
     # Une note pèse selon sa pondération, qu'elle porte sur l'entité consultée
     # ou sur un contact.

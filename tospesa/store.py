@@ -32,11 +32,9 @@ Want = tuple[str, int, int]
 
 
 class Peer(Protocol):
-    """Ce qu'on attend d'un pair : une copie locale, un fichier, un nœud distant."""
+    """Ce qu'on attend d'un pair : une copie locale, un nœud distant."""
 
-    def records_for(
-        self, wants: Iterable[Want], limit: int | None = None
-    ) -> list[Record]: ...
+    def records_for(self, wants: Iterable[Want]) -> list[Record]: ...
 
 
 class Store:
@@ -119,9 +117,7 @@ class Store:
         neighborhood = (entity for entity, _, _ in self.network().neighborhood(viewer))
         return self.heads([viewer, *neighborhood])
 
-    def records_for(
-        self, wants: Iterable[Want], limit: int | None = None
-    ) -> list[Record]:
+    def records_for(self, wants: Iterable[Want]) -> list[Record]:
         """Enregistrements plus récents que les dates demandées, dans l'ordre
         demandé : pour chaque auteur, son annonce puis ses notes."""
         by_author: dict[str, list[Note]] = {}
@@ -138,25 +134,21 @@ class Store:
                 for note in sorted(by_author.get(author, []), key=lambda n: n.timestamp)
                 if note.timestamp > notes_since
             ]
-            for record in candidates:
-                if len(sent) == limit:
-                    return sent
-                sent.append(record)
+            sent += candidates
         return sent
 
-    def pull(self, peer: Peer, viewer: str, limit: int | None = None) -> int:
+    def pull(self, peer: Peer, viewer: str) -> int:
         """Récupère auprès du pair les enregistrements du voisinage de confiance
         du lecteur, en élargissant le voisinage à mesure qu'ils arrivent. Ce
         que le pair renvoie sans qu'on l'ait demandé est ignoré. Renvoie le
         nombre d'enregistrements nouveaux."""
         added = 0
-        while limit is None or added < limit:
-            remaining = None if limit is None else limit - added
+        while True:
             wants = self.wants(viewer)
             wanted = {author for author, _, _ in wants}
             received = sum(
                 self.add(record)
-                for record in peer.records_for(wants, remaining)
+                for record in peer.records_for(wants)
                 if record.author_id in wanted
             )
             if not received:
@@ -164,14 +156,13 @@ class Store:
             added += received
         return added
 
-    def trace(self, viewer: str, entity: str, limit: int | None = None) -> list[Note]:
+    def trace(self, viewer: str, entity: str) -> list[Note]:
         """Recherche ciblée : les auteurs du réseau de confiance du lecteur qui
         ont noté l'entité, les plus proches d'abord, avec pour chacun la chaîne
         de notes qui le relie au lecteur. Tout ce qui est renvoyé appartient
         donc au voisinage de confiance du lecteur."""
         via: dict[str, str] = {}
         found: dict[tuple[str, str], Note] = {}
-        raters = 0
         for node, _, parent in self.network().neighborhood(viewer):
             via[node] = parent
             rating = self._notes.get((node, entity))
@@ -182,9 +173,6 @@ class Store:
                 parent = via[node]
                 found[(parent, node)] = self._notes[(parent, node)]
                 node = parent
-            raters += 1
-            if raters == limit:
-                break
         return list(found.values())
 
     # --- persistance ------------------------------------------------------
@@ -223,11 +211,7 @@ class Store:
         with self._locked(fcntl.LOCK_EX):
             self._read_journal()
             temporary = self._path.with_suffix(".tmp")
-            self.save(temporary)
+            temporary.write_text("".join(record.to_json() + "\n" for record in self))
             temporary.replace(self._path)
             status = self._path.stat()
             self._inode, self._offset = status.st_ino, status.st_size
-
-    def save(self, path: Path) -> None:
-        """Écrit un instantané de la copie (pour l'export)."""
-        path.write_text("".join(record.to_json() + "\n" for record in self))
