@@ -2,7 +2,7 @@
 
 import pytest
 
-from tospesa.network import Network
+from tospesa.network import DAMPING, Network
 
 
 def test_unrated_entity_is_neutral():
@@ -158,3 +158,22 @@ def test_weight_scales_how_much_a_note_counts():
     on_contact.rate("a", "book", -1)
     on_contact.rate("b", "book", 1)
     assert on_contact.score("me", "book") == pytest.approx(-9 / 11)
+
+
+def test_friends_echoing_one_distant_source_add_no_certainty():
+    # Un seul notateur, à trois pas : me -> hub -> exit -> rater. Le hub et
+    # sa sortie font partie d'un groupe d'amis qui se font tous confiance.
+    # Ces amis ne font que se renvoyer la même information : la certitude doit
+    # rester celle de la chaîne qui mène au notateur.
+    net = Network()
+    net.rate("me", "hub", 1)
+    group = ["hub", "exit", *(f"friend{i}" for i in range(8))]
+    for a in group:
+        for b in group:
+            if a != b:
+                net.rate(a, b, 1)
+    net.rate("exit", "rater", 1)
+    net.rate("rater", "book", 1)
+    value, certainty, depth = net.opinion("me", "book")
+    assert (value, depth) == (1, 3)
+    assert certainty == pytest.approx(DAMPING**3)

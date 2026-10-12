@@ -43,6 +43,10 @@ encore ouvertes. Les features utilisateur sont dans `FEATURES.md`.
 - **Recherche ciblée** (`/trace`). « Dans le réseau de confiance de Bob, qui a
   noté X ? » Le pair répond avec les chaînes de notes signées qui relient Bob
   à ces auteurs, et rien d'autre.
+- **Calcul du score** (`tospesa/network.py`) : une requête qui descend
+  au plus 7 pas, avec un calcul mémorisé par (utilisateur, profondeur). On ne
+  descend que vers les contacts qui peuvent mener à un notateur à temps.
+  Environ 3 ms par score sur un réseau synthétique de 10 000 utilisateurs.
 - **Estimateur incomplet** (`tospesa score`). Il affiche d'abord le score de
   la copie locale, avec sa certitude, puis le score affiné après la recherche
   ciblée auprès des pairs.
@@ -60,8 +64,6 @@ encore ouvertes. Les features utilisateur sont dans `FEATURES.md`.
 - Un pair voit les requêtes qu'on lui adresse : qui consulte, et quelles
   empreintes. Le chiffrement protège ces requêtes des observateurs du réseau,
   pas du pair lui-même. Cela rejoint la question ouverte de la privacy.
-- Le calcul du score parcourt toute la copie locale à chaque consultation. Il
-  faudra l'optimiser pour de grands voisinages.
 - Les entités notées positivement (livres, etc.) sont aussi demandées aux
   pairs comme si c'étaient des auteurs, puisque tout est empreinte. Ces
   demandes ne renvoient rien et coûtent un peu de bande passante.
@@ -109,7 +111,10 @@ sans attendre le calcul complet.
 Trois pistes ouvertes, qu'on peut combiner :
 - *Notes brutes* : le lecteur récupère les notes signées et calcule lui-même.
   C'est vérifiable, chacun choisit son algorithme, et on peut supprimer tous
-  les échos. En contrepartie, les données sont plus volumineuses et les notes
+  les échos. C'est aussi le client qui voit qu'une même source lui arrive par
+  plusieurs chemins (Carole, directement et via Thomas qui lui fait
+  confiance). Il décide alors de la compter deux fois, une seule, ou de faire
+  plus fin. En contrepartie, les données sont plus volumineuses et les notes
   doivent être lisibles.
 - *Avis agrégés* : chaque nœud répond avec son avis calculé (« sans me
   compter »). C'est léger, et ça cache les notes individuelles. En

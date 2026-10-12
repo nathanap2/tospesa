@@ -91,15 +91,25 @@ disent, positif comme négatif. Pour A qui consulte :
 
 Un lien de défiance pèse sur l'entité visée. Il ne transmet rien au-delà.
 
-Le score se construit de proche en proche. Pour me donner un avis, je demande
-à chacun de mes contacts de confiance ce que pense *son* réseau. Je fais
-ensuite la moyenne de leurs réponses, pondérée par ma confiance en chacun.
-Une réponse peut peser un peu plus si elle est plus « certaine » (plus de
-sources, chemins plus courts), mais jamais beaucoup plus. Le réseau derrière
-un contact, même piraté, ne pèse donc jamais beaucoup plus que ce contact.
+Le score se construit de proche en proche, comme une requête qui descend
+dans mon réseau en connaissant sa profondeur. Pour me donner un avis, je
+demande à chacun de mes contacts de confiance ce que pense *son* réseau. Je
+fais ensuite la moyenne de leurs réponses, pondérée par ma confiance en
+chacun et par leur certitude.
 
-Pas d'écho : quand je consulte, rien ne revient vers moi. Que mes contacts me
-fassent confiance en retour ne change pas mon score.
+La certitude d'une réponse dépend de la proximité de sa meilleure source : son
+poids est divisé par deux à chaque pas. Au-delà de 7 pas, une source ne pèse
+plus que 0,5 % et on arrête de chercher. Le réseau derrière un contact, même
+piraté, ne pèse donc pas plus que ce contact, à la proximité de leurs sources
+près.
+
+Chaque réponse indique la profondeur de sa meilleure source, pour qu'on sache
+si l'estimation est solide ou lointaine.
+
+Pas d'écho : quand je consulte, on fait comme si personne ne me faisait
+confiance. Mon propre avis ne peut pas me revenir déguisé en avis d'un autre,
+quelle que soit la longueur de la boucle. Que mes contacts me fassent
+confiance en retour ne change pas mon score.
 
 Quand on a noté soi-même une entité, son avis est sa note : son réseau ne la
 modifie pas. *(À revoir avec les pondérations, voir les questions ouvertes.)*

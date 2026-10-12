@@ -9,6 +9,7 @@ telles quelles ; pour noter une personne, on passe sa clé publique.
 import argparse
 from pathlib import Path
 
+from tospesa.network import Opinion
 from tospesa.node import Home, Node, SyncReport, lookup, sync
 from tospesa.protocol import InvalidRecord, entity_id, record_from_json
 from tospesa.store import Store
@@ -57,6 +58,16 @@ def _print_report(report: SyncReport) -> None:
         print(f"attention : {address} ne détient pas la clé de son adresse", flush=True)
 
 
+def _print_opinion(opinion: Opinion, origin: str) -> None:
+    if opinion.certainty == 0:
+        detail = "aucune information"
+    elif opinion.depth == 0:
+        detail = "ta propre note"
+    else:
+        detail = f"certitude {opinion.certainty:.2f}, source la plus sûre à {opinion.depth} pas"
+    print(f"{opinion.value:+.2f}  ({detail} ; {origin})", flush=True)
+
+
 def main(argv: list[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     home = Home(args.home)
@@ -78,11 +89,10 @@ def main(argv: list[str] | None = None) -> None:
         home.rate(args.entity, None)
     elif args.command == "score":
         me = home.identity()
-        value, certainty = home.store.network().opinion(me.id, entity_id(args.entity))
-        print(f"{value:+.2f}  certitude {certainty:.2f}  (copie locale)", flush=True)
+        target = entity_id(args.entity)
+        _print_opinion(home.store.network().opinion(me.id, target), "copie locale")
         if not args.local and lookup(home, args.entity, args.limit).reached:
-            value, certainty = home.store.network().opinion(me.id, entity_id(args.entity))
-            print(f"{value:+.2f}  certitude {certainty:.2f}  (réseau)")
+            _print_opinion(home.store.network().opinion(me.id, target), "réseau")
     elif args.command == "export":
         home.store.save(args.file)
     elif args.command == "import":

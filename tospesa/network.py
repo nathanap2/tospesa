@@ -3,35 +3,56 @@
 Une note est un couple (valeur, pondération) : la valeur dans [-1, 1], la
 pondération dans ]0, 1] dit à quel point l'auteur engage sa note.
 
-L'avis d'un auteur sur une entité est un couple (valeur, certitude) :
-- s'il a noté l'entité, c'est la valeur de sa note, avec pour certitude sa
+Le score se calcule comme une requête qui part du lecteur et descend dans
+son réseau de confiance, en connaissant sa profondeur. Interrogé à une
+profondeur donnée, un utilisateur répond (valeur, certitude, profondeur de sa
+meilleure source) :
+- s'il a noté l'entité : la valeur de sa note, avec pour certitude sa
   pondération ;
-- sinon, c'est la moyenne des valeurs de ses contacts de confiance (les
-  auteurs qu'il note positivement) qui ont un avis, pondérée par sa confiance
-  en chacun (valeur × pondération de sa note) et par leur certitude. Sa certitude vaut DAMPING fois la
-  combinaison (« ou » probabiliste) des certitudes de ces contacts : elle
-  baisse à chaque pas et monte avec le nombre de sources, sans dépasser 1.
+- sinon : la moyenne des réponses de ses contacts de confiance (interrogés
+  un pas plus loin), pondérée par sa confiance en chacun (valeur × pondération
+  de sa note) et par leur certitude. Sa certitude est celle de sa meilleure
+  source, multipliée par la confiance qui y mène et atténuée de DAMPING à
+  chaque pas.
 
-Les notes négatives ne sont jamais traversées (règle de propagation). Le
-calcul itère jusqu'à ce que les avis se stabilisent : la décroissance
-géométrique de la certitude suffit à éteindre l'influence des chemins longs.
+On ne descend pas au-delà de MAX_DEPTH pas, là où l'atténuation passe sous
+CUTOFF : une source aussi lointaine n'apporte plus d'information utile.
 
-Le score d'un lecteur est la valeur de son propre avis, ou 0 s'il n'en a pas.
-Pendant ce calcul, rien ne revient vers le lecteur : les liens qui pointent
-vers lui sont ignorés, pour qu'il n'entende pas son propre avis en écho.
+Les notes négatives ne sont jamais traversées. Pendant le calcul, on fait
+comme si personne ne faisait confiance au lecteur : son propre avis ne peut
+pas lui revenir déguisé en avis d'un autre. Les autres boucles s'éteignent
+avec l'atténuation.
+
+Le score d'un lecteur est la valeur de sa propre réponse, ou 0 s'il n'a
+aucune information.
 """
 
+import math
 from collections.abc import Iterator
+from typing import NamedTuple
 
-DAMPING = 0.85
-_TOLERANCE = 1e-9
-_MAX_ITERATIONS = 10_000
+DAMPING = 0.5
+CUTOFF = 0.005
+MAX_DEPTH = math.floor(math.log(CUTOFF) / math.log(DAMPING))
+
+
+class Opinion(NamedTuple):
+    value: float
+    certainty: float
+    depth: int  # distance de la meilleure source
+
+
+NO_OPINION = Opinion(0.0, 0.0, 0)
 
 
 class Network:
     def __init__(self):
         # author -> {target -> (value, weight)}
         self._notes: dict[str, dict[str, tuple[float, float]]] = {}
+        # target -> auteurs qui lui font confiance (note positive)
+        self._trusted_by: dict[str, set[str]] = {}
+        # entité -> auteurs qui l'ont notée
+        self._raters: dict[str, set[str]] = {}
 
     def rate(
         self, author: str, target: str, value: float, weight: float = 1.0
@@ -43,47 +64,85 @@ class Network:
         if author == target:
             raise ValueError("un auteur ne se note pas lui-même")
         self._notes.setdefault(author, {})[target] = (value, weight)
+        self._raters.setdefault(target, set()).add(author)
+        trusted_by = self._trusted_by.setdefault(target, set())
+        if value > 0:
+            trusted_by.add(author)
+        else:
+            trusted_by.discard(author)
 
     def unrate(self, author: str, target: str) -> None:
         del self._notes[author][target]
         if not self._notes[author]:
             del self._notes[author]
+        self._raters[target].discard(author)
+        self._trusted_by.get(target, set()).discard(author)
 
-    def opinions(self, entity: str, viewer: str) -> dict[str, tuple[float, float]]:
-        """Avis (valeur, certitude) sur l'entité de chaque auteur qui en a un,
-        tels que les voit le lecteur."""
-        direct = {
-            author: notes[entity]
-            for author, notes in self._notes.items()
-            if entity in notes
-        }
-        opinions = dict(direct)
-        for _ in range(_MAX_ITERATIONS):
-            updated = dict(direct)
-            for author, notes in self._notes.items():
-                if author in direct:
-                    continue
+    def opinion(self, viewer: str, entity: str) -> Opinion:
+        """Réponse du lecteur sur l'entité ; NO_OPINION s'il n'a aucune
+        information."""
+        own = self._notes.get(viewer, {}).get(entity)
+        if own is not None:
+            return Opinion(own[0], own[1], 0)
+        # Distance de chacun au notateur le plus proche, en remontant la
+        # confiance depuis les notateurs, sans passer par le lecteur : on ne
+        # descendra que vers ceux qui peuvent apporter une information à temps.
+        to_source = {r: 0 for r in self._raters.get(entity, ()) if r != viewer}
+        frontier = list(to_source)
+        for distance in range(1, MAX_DEPTH):
+            next_frontier = []
+            for node in frontier:
+                for author in self._trusted_by.get(node, ()):
+                    if author != viewer and author not in to_source:
+                        to_source[author] = distance
+                        next_frontier.append(author)
+            frontier = next_frontier
+
+        memo: dict[tuple[str, int], Opinion | None] = {}
+
+        def ask(user: str, depth: int) -> Opinion | None:
+            key = (user, depth)
+            if key in memo:
+                return memo[key]
+            notes = self._notes.get(user, {})
+            if entity in notes:
+                value, weight = notes[entity]
+                answer = Opinion(value, weight, 0)
+            else:
                 weighted = weights = 0.0
-                doubt = 1.0
+                best = None
                 for contact, (trust, weight) in notes.items():
-                    if trust > 0 and contact != viewer and contact in opinions:
-                        trust *= weight
-                        value, certainty = opinions[contact]
-                        weighted += trust * certainty * value
-                        weights += trust * certainty
-                        doubt *= 1 - certainty
-                if weights:
-                    updated[author] = (weighted / weights, DAMPING * (1 - doubt))
-            if _converged(opinions, updated):
-                return updated
-            opinions = updated
-        raise RuntimeError(f"les avis sur {entity!r} ne convergent pas")
+                    if (
+                        trust <= 0
+                        or contact == viewer
+                        or depth + 1 + to_source.get(contact, MAX_DEPTH) > MAX_DEPTH
+                    ):
+                        continue
+                    reply = ask(contact, depth + 1)
+                    if reply is None:
+                        continue
+                    strength = trust * weight * reply.certainty
+                    weighted += strength * reply.value
+                    weights += strength
+                    if best is None or strength > best[0]:
+                        best = (strength, reply.depth + 1)
+                if best is None:
+                    answer = None
+                else:
+                    answer = Opinion(weighted / weights, DAMPING * best[0], best[1])
+            memo[key] = answer
+            return answer
+
+        return ask(viewer, 0) or NO_OPINION
+
+    def score(self, viewer: str, entity: str) -> float:
+        return self.opinion(viewer, entity).value
 
     def neighborhood(self, viewer: str) -> Iterator[tuple[str, int, str]]:
         """Entités notées positivement de proche en proche depuis le lecteur,
         des plus proches aux plus lointaines : (entité, distance en pas,
-        auteur par lequel on l'a atteinte). Seuls les auteurs connus ont des
-        contacts à explorer."""
+        utilisateur par lequel on l'a atteinte). Seuls les utilisateurs qui ont
+        posé des notes ont des contacts à explorer."""
         seen = {viewer}
         frontier = [viewer]
         distance = 0
@@ -99,23 +158,8 @@ class Network:
             frontier = next_frontier
 
     def nearby_raters(self, viewer: str, entity: str) -> Iterator[tuple[str, int]]:
-        """Auteurs du réseau de confiance du lecteur qui ont noté l'entité, avec
-        leur distance en pas, du plus proche au plus lointain."""
+        """Utilisateurs du réseau de confiance du lecteur qui ont noté
+        l'entité, avec leur distance en pas, du plus proche au plus lointain."""
         for author, distance, _ in self.neighborhood(viewer):
             if entity in self._notes.get(author, {}):
                 yield author, distance
-
-    def opinion(self, viewer: str, entity: str) -> tuple[float, float]:
-        """(score, certitude) du lecteur ; (0, 0) s'il n'a aucune information."""
-        return self.opinions(entity, viewer).get(viewer, (0.0, 0.0))
-
-    def score(self, viewer: str, entity: str) -> float:
-        return self.opinion(viewer, entity)[0]
-
-
-def _converged(old: dict, new: dict) -> bool:
-    return old.keys() == new.keys() and all(
-        abs(old[a][0] - new[a][0]) < _TOLERANCE
-        and abs(old[a][1] - new[a][1]) < _TOLERANCE
-        for a in new
-    )
