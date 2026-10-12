@@ -125,6 +125,19 @@ eux.
 Pour commencer, une interface très simple : noter une entité et consulter un
 score. Les supports d'accès plus riches viendront plus tard.
 
+### Affichage du score et de sa confiance
+La valeur d'un score ne suffit pas : un −1,00 tiré d'une seule source à 7 pas
+est instable, et sa certitude est infime. L'interface doit :
+- matérialiser la confiance du score d'une façon ou d'une autre (finesse
+  d'affichage, indication de la profondeur de la meilleure source…) ;
+- ne rien afficher (« pas assez d'information ») en dessous d'un seuil de
+  certitude.
+
+Ce seuil est le seul paramètre à régler. La profondeur de coupure du calcul
+en découle, puisqu'il est inutile de chercher des sources dont la certitude
+maximale resterait sous le seuil : 3 % → 5 pas, 1,5 % → 6 pas, 0,5 % → 7 pas
+(valeur actuelle, à resserrer quand on construira l'affichage).
+
 ### Note rapide
 Depuis une modale, l'utilisateur note en un geste. La pondération vaut alors 1
 par défaut.
