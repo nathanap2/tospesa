@@ -9,6 +9,7 @@ par n'importe quelle autre chaîne, hachée telle quelle.
 """
 
 import argparse
+import signal
 from pathlib import Path
 
 from tospesa.network import Opinion
@@ -93,6 +94,10 @@ def _print_node_start(node: Node) -> None:
     print(flush=True)
 
 
+def _interrupt(signum, frame) -> None:
+    raise KeyboardInterrupt
+
+
 def main(argv: list[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     home = Home(args.home)
@@ -103,10 +108,18 @@ def main(argv: list[str] | None = None) -> None:
         node = Node(home, args.host, args.port, public_host=args.public_host,
                     public_port=args.public_port, relay=args.command == "relay")
         _print_node_start(node)
+        # Fermer le terminal (SIGHUP) ou l'arrêt par le système (SIGTERM) doit
+        # arrêter le nœud aussi proprement qu'un Ctrl+C, port de la box compris.
+        for name in ("SIGTERM", "SIGHUP"):
+            if hasattr(signal, name):
+                signal.signal(getattr(signal, name), _interrupt)
         try:
             node.run_forever(args.interval, _print_report)
         except KeyboardInterrupt:
-            node.stop()
+            pass
+        finally:
+            closed = " et port refermé sur la box" if node.stop() else ""
+            print(f"{'relais' if node.relay else 'nœud'} arrêté{closed}.", flush=True)
     elif args.command == "init":
         identity = home.create_identity()
         if args.name:

@@ -678,14 +678,18 @@ class Node:
         self._thread.start()
         return self
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
+        """Arrête le nœud et referme le port ouvert sur la box. Renvoie True si
+        un port a été refermé."""
         self.server.shutdown()
         self.server.server_close()
-        if self._gateway is not None:
-            try:
-                self._gateway.delete_mapping(self.port)
-            except upnp.UPnPError:
-                pass  # la redirection expirera d'elle-même (bail d'une heure)
+        if self._gateway is None:
+            return False
+        try:
+            self._gateway.delete_mapping(self.port)
+        except upnp.UPnPError:
+            return False  # la redirection expirera d'elle-même (bail d'une heure)
+        return True
 
     def run_forever(self, interval: float, report: Callable[[SyncReport], None]) -> None:
         self.start()
