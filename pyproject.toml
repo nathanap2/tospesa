@@ -1,0 +1,10 @@
+[project]
+name = "tospesa"
+version = "0.0.1"
+requires-python = ">=3.12"
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
