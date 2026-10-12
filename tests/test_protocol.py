@@ -17,7 +17,8 @@ def run(capsys, home, *args):
 
 
 def score(capsys, home, entity):
-    return float(run(capsys, home, "score", entity))
+    """Le dernier score affiché : celui du réseau s'il a été interrogé."""
+    return float(run(capsys, home, "score", entity).splitlines()[-1].split()[0])
 
 
 def test_scores_flow_through_exchanged_notes(tmp_path, capsys):

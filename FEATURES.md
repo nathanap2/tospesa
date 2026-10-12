@@ -139,6 +139,10 @@ que l'interface puisse s'arrêter quand elle veut. Le dosage des pondérations
 (assez petites, nombre limité, révision des « poussières ») relève de
 l'interface.
 
+Piste pour plus tard : le même filtrage collaboratif pourrait aussi ajuster la
+pondération des notes de confiance déjà posées. Un contact avec qui je suis
+souvent en désaccord verrait sa pondération baisser, et inversement.
+
 Risque identifié : des comptes « caméléons » qui copient les avis consensuels
 pour gagner de la confiance par affinité (*shilling attack*). La parade doit
 découler du modèle lui-même, pas de rustines qui le cassent.

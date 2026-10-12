@@ -1,28 +1,70 @@
-# tospesa — pistes d'architecture réseau
+# tospesa — architecture réseau
 
-Rien ici n'est tranché. Ce sont les pistes qu'on garde ouvertes pour la couche
-réseau. Les features utilisateur sont dans `FEATURES.md`.
+La première partie décrit ce qui est en place. La suite rassemble les pistes
+encore ouvertes. Les features utilisateur sont dans `FEATURES.md`.
 
-## Point de départ
+## Ce qui est en place
 
-On commence par du centralisé. Les notes sont conçues comme des déclarations
-signées et portables, pour garder la décentralisation possible plus tard.
+- **Enregistrements signés** (`tospesa/protocol.py`), en Ed25519. Chacun se
+  vérifie seul, donc il peut transiter par n'importe quel pair. Deux types :
+  - les *notes*, sur l'empreinte SHA-256 d'une entité ;
+  - les *annonces* : la liste des adresses où trouver les notes de leur
+    auteur. Le format des adresses est contraint, et leur nombre limité, pour
+    ne pas ouvrir un champ de texte libre.
+- **Copie locale** (`tospesa/store.py`). La fusion ne dépend ni de l'ordre
+  d'arrivée ni des doublons. Deux copies qui ont reçu les mêmes
+  enregistrements, par n'importe quels chemins, sont identiques. Elle est
+  persistée dans un journal où l'on ne fait qu'ajouter, partagé sous verrou
+  entre le nœud qui tourne et la ligne de commande. Chaque processus relit ce
+  que l'autre y ajoute.
+- **Adresses et chiffrement.** L'adresse d'un nœud contient la clé publique
+  de son propriétaire : `tsp://<clé>@hôte:port`. Les échanges sont chiffrés en
+  TLS 1.3, avec un certificat autosigné dérivé de cette clé. Le client vérifie
+  que le nœud joint présente bien la clé de l'adresse, avant de lui envoyer
+  quoi que ce soit. Sinon, l'adresse est signalée comme imposteur. Il n'y a
+  pas d'autorité de certification : c'est la clé qui fait foi, comme dans
+  Scuttlebutt.
+- **Nœuds** (`tospesa/node.py`). Le même programme sert sa copie en HTTPS
+  (`/heads`, `/push`, `/pull`, `/trace`), avec deux politiques d'accueil :
+  - le *nœud personnel* (`tospesa node`) n'accepte que les enregistrements
+    de son voisinage de confiance. Comme sa copie contient ce voisinage, ses
+    contacts y retrouvent les notes de tiers absents : ce sont les copies de
+    secours ;
+  - le *relais* (`tospesa relay`) accepte tout enregistrement correctement
+    signé. C'est une première version des facilitateurs de réseau. Un
+    opérateur pourra y ajouter ses règles (quotas, clés admises…).
+- **Synchronisation** (`tospesa sync`, et périodiquement dans le nœud
+  personnel). On joint tous les pairs connus : ceux de sa configuration
+  (`tospesa peers add`), puis les adresses annoncées par son voisinage, les
+  plus proches d'abord. Ceux qui ne répondent pas sont passés. On publie ses
+  enregistrements, puis on récupère ceux de son voisinage. Son annonce liste
+  son nœud et les pairs qui ont accepté ses notes (modèle « outbox » de
+  Nostr) : ses contacts savent où les trouver même quand son nœud est éteint.
+- **Recherche ciblée** (`/trace`). « Dans le réseau de confiance de Bob, qui a
+  noté X ? » Le pair répond avec les chaînes de notes signées qui relient Bob
+  à ces auteurs, et rien d'autre.
+- **Estimateur incomplet** (`tospesa score`). Il affiche d'abord le score de
+  la copie locale, avec sa certitude, puis le score affiné après la recherche
+  ciblée auprès des pairs.
+- **Défense en profondeur.** Le client ignore ce qu'un pair renvoie sans
+  qu'on l'ait demandé, et écarte les enregistrements invalides. Un pair
+  malveillant ne peut donc ni injecter de notes d'inconnus dans la copie
+  locale, ni falsifier de notes. Il peut seulement en retenir.
+- **Échange manuel** (`export` / `import`) : une réplication par fichier. Un
+  fichier importé est traité comme un pair.
 
-## Ce qui existe déjà (prototype)
-
-- **Notes signées** (`tospesa/protocol.py`) : Ed25519, sur l'empreinte SHA-256
-  de l'entité. Une note se vérifie seule, donc elle peut transiter par
-  n'importe quel pair.
-- **Copie locale** (`tospesa/store.py`) : la fusion ne dépend ni de l'ordre
-  d'arrivée ni des doublons. La plus récente note de chaque auteur sur chaque
-  entité l'emporte. Deux copies qui ont reçu les mêmes notes, par n'importe
-  quels chemins, sont identiques. C'est la propriété de base de toute
-  synchronisation entre pairs.
-- **Synchronisation** (`Store.pull`) : par dates, limitée au voisinage de
-  confiance, les auteurs les plus proches d'abord (voir plus bas).
-- **Échange manuel** (`tospesa/cli.py`, `export` / `import`) : une
-  réplication par fichier, façon Scuttlebutt hors ligne. Un fichier importé
-  est traité comme un pair : on n'en tire que son voisinage de confiance.
+### Travail restant
+- Les machines derrière une box ne sont pas joignables. Elles passent par
+  les relais. Le contournement des box (NAT traversal) est un chantier à
+  part.
+- Un pair voit les requêtes qu'on lui adresse : qui consulte, et quelles
+  empreintes. Le chiffrement protège ces requêtes des observateurs du réseau,
+  pas du pair lui-même. Cela rejoint la question ouverte de la privacy.
+- Le calcul du score parcourt toute la copie locale à chaque consultation. Il
+  faudra l'optimiser pour de grands voisinages.
+- Les entités notées positivement (livres, etc.) sont aussi demandées aux
+  pairs comme si c'étaient des auteurs, puisque tout est empreinte. Ces
+  demandes ne renvoient rien et coûtent un peu de bande passante.
 
 ## Synchronisation entre pairs
 
