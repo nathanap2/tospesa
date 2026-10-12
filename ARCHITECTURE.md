@@ -70,11 +70,18 @@ encore ouvertes. Les features utilisateur sont dans `FEATURES.md`.
   locale, ni falsifier de notes. Il peut seulement en retenir.
 
 ### Travail restant
+- **v0.1 : réécriture en Rust avec rust-libp2p.** La couche réseau actuelle
+  (vérification des adresses, ouverture de port UPnP, relais) est codée à la
+  main alors que libp2p fournit ces mécanismes, éprouvés : AutoNAT, perçage
+  de box, relais de connexion, annuaire distribué. Tout le projet passe en
+  Rust plutôt qu'un mélange de langages : un seul exécutable à distribuer, et
+  un cœur réutilisable pour une app (Tauri). Les clés Ed25519 restent
+  valables ; le calcul des scores, le format des notes et les tests se
+  transposent.
 - Une machine derrière une box sans UPnP, et sans IPv6 joignable, reste
   injoignable. Elle participe quand même (ses notes sont publiées chez ses
   pairs joignables), mais ne sert pas de copie aux autres. Le « perçage » de
-  box (hole punching) avec l'aide d'un pair est la prochaine étape si ça
-  s'avère limitant.
+  box (hole punching) viendra avec libp2p en v0.1.
 - Un pair voit les requêtes qu'on lui adresse : qui consulte, et quelles
   empreintes. Le chiffrement protège ces requêtes des observateurs du réseau,
   pas du pair lui-même. Cela rejoint la question ouverte de la privacy.
