@@ -33,6 +33,19 @@ encore ouvertes. Les features utilisateur sont dans `FEATURES.md`.
   - le *relais* (`tospesa relay`) accepte tout enregistrement correctement
     signé. C'est une première version des facilitateurs de réseau. Un
     opérateur pourra y ajouter ses règles (quotas, clés admises…).
+- **Joignabilité, sur le modèle de BitTorrent.** Un nœud qui écoute sur
+  toutes les interfaces détecte ses adresses publiques : il demande à la box
+  d'ouvrir un port (UPnP, avec un bail renouvelé et une fermeture à l'arrêt),
+  et repère son adresse IPv6 publique s'il en a une. Une adresse détectée
+  n'est annoncée qu'après vérification : un pair essaie de rappeler le nœud
+  (`/probe`), uniquement à l'adresse IP d'où vient la demande, pour ne pas
+  servir à sonder des machines tierces. Une adresse donnée explicitement
+  (`--public-host`) est annoncée telle quelle.
+- **Invitations** (`tospesa invite` / `join`). Le code contient la clé, le nom
+  proposé et les adresses où joindre l'ami (son nœud, ses pairs) : c'est
+  l'équivalent des nœuds d'amorçage de BitTorrent. L'accepter ajoute l'ami au
+  carnet de contacts local (jamais publié), lui fait confiance et prend ses
+  adresses comme points d'entrée.
 - **Synchronisation** (`tospesa sync`, et périodiquement dans le nœud
   personnel). On joint tous les pairs connus : ceux de sa configuration
   (`tospesa peers add`), puis les adresses annoncées par son voisinage, les
@@ -58,9 +71,11 @@ encore ouvertes. Les features utilisateur sont dans `FEATURES.md`.
   fichier importé est traité comme un pair.
 
 ### Travail restant
-- Les machines derrière une box ne sont pas joignables. Elles passent par
-  les relais. Le contournement des box (NAT traversal) est un chantier à
-  part.
+- Une machine derrière une box sans UPnP, et sans IPv6 joignable, reste
+  injoignable. Elle participe quand même (ses notes sont publiées chez ses
+  pairs joignables), mais ne sert pas de copie aux autres. Le « perçage » de
+  box (hole punching) avec l'aide d'un pair est la prochaine étape si ça
+  s'avère limitant.
 - Un pair voit les requêtes qu'on lui adresse : qui consulte, et quelles
   empreintes. Le chiffrement protège ces requêtes des observateurs du réseau,
   pas du pair lui-même. Cela rejoint la question ouverte de la privacy.

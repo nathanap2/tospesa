@@ -18,6 +18,7 @@ bien la clé de l'adresse.
 
 import datetime
 import hashlib
+import ipaddress
 import json
 import re
 from dataclasses import asdict, dataclass
@@ -38,7 +39,9 @@ from cryptography.hazmat.primitives.serialization import (
 from cryptography.x509.oid import NameOID
 
 MAX_ADDRESSES = 8
-_ADDRESS = re.compile(r"tsp://([0-9a-f]{64})@([A-Za-z0-9.\-]{1,100}):([0-9]{1,5})")
+_ADDRESS = re.compile(
+    r"tsp://([0-9a-f]{64})@(\[[0-9a-fA-F:.]{2,45}\]|[A-Za-z0-9.\-]{1,100}):([0-9]{1,5})"
+)
 
 
 class InvalidRecord(Exception):
@@ -50,15 +53,24 @@ def entity_id(identifier: str) -> str:
 
 
 def format_address(key: str, host: str, port: int) -> str:
-    return f"tsp://{key}@{host}:{port}"
+    """Adresse d'un nœud ; un hôte IPv6 est mis entre crochets."""
+    return f"tsp://{key}@[{host}]:{port}" if ":" in host else f"tsp://{key}@{host}:{port}"
 
 
 def parse_address(address: str) -> tuple[str, str, int]:
-    """(clé publique, hôte, port) d'une adresse de nœud."""
+    """(clé publique, hôte, port) d'une adresse de nœud ; l'hôte IPv6 est
+    rendu sans crochets."""
     match = _ADDRESS.fullmatch(address)
     if match is None or not 0 < int(match[3]) < 65536:
         raise InvalidRecord(f"adresse mal formée : {address!r}")
-    return match[1], match[2], int(match[3])
+    host = match[2]
+    if host.startswith("["):
+        host = host[1:-1]
+        try:
+            ipaddress.IPv6Address(host)
+        except ValueError as error:
+            raise InvalidRecord(f"adresse IPv6 mal formée : {address!r}") from error
+    return match[1], host, int(match[3])
 
 
 def public_key_of(certificate_der: bytes) -> str:

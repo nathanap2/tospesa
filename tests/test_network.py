@@ -1,10 +1,17 @@
 """Comportements du réseau : plusieurs nœuds qui tournent pour de vrai."""
 
+import re
+import socket
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
 import pytest
+
+from tospesa import upnp
 
 from tospesa.node import Home, Node, sync
 from tospesa.protocol import entity_id, format_address, parse_address
-from test_protocol import BOOK, FILM, run
+from test_protocol import BOOK, FILM, run, score
 
 RARE = "Un article obscur"
 OTHER = "Un autre article"
@@ -15,11 +22,11 @@ def start(tmp_path):
     """Démarre le nœud d'un dossier (ou un relais) ; tout est arrêté à la fin."""
     running = []
 
-    def start(name, relay=False):
+    def start(name, relay=False, **options):
         home = Home(tmp_path / name)
         if relay:
             home.create_identity()
-        node = Node(home, relay=relay).start()
+        node = Node(home, relay=relay, **options).start()
         running.append(node)
         return node
 
@@ -169,3 +176,135 @@ def test_impostor_nodes_are_detected(capsys, start, user):
     assert report.impostors == [fake_alice]
     assert report.reached == []
     assert authors(carol) == {run(capsys, carol, "id")}
+
+
+class FakeBox:
+    """Une box qui parle UPnP (SSDP puis SOAP), joignable en unicast sur
+    127.0.0.1, et qui donne 127.0.0.1 comme adresse publique."""
+
+    def __init__(self):
+        self.mappings: dict[int, str] = {}
+        box = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self._reply(
+                    '<root xmlns="urn:schemas-upnp-org:device-1-0"><device><serviceList>'
+                    "<service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1"
+                    "</serviceType><controlURL>/ctl</controlURL></service>"
+                    "</serviceList></device></root>"
+                )
+
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"])).decode()
+                action = self.headers["SOAPAction"].strip('"').split("#")[1]
+                field = lambda name: re.search(f"<{name}>(.*?)</{name}>", body)[1]  # noqa: E731
+                if action == "AddPortMapping":
+                    box.mappings[int(field("NewExternalPort"))] = field("NewInternalClient")
+                elif action == "DeletePortMapping":
+                    box.mappings.pop(int(field("NewExternalPort")))
+                answer = (
+                    "<NewExternalIPAddress>127.0.0.1</NewExternalIPAddress>"
+                    if action == "GetExternalIPAddress" else ""
+                )
+                self._reply(
+                    '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>'
+                    f'<u:{action}Response xmlns:u="x">{answer}</u:{action}Response>'
+                    "</s:Body></s:Envelope>"
+                )
+
+            def _reply(self, text):
+                data = text.encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        self.http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.http.serve_forever, daemon=True).start()
+        self.ssdp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.ssdp.bind(("127.0.0.1", 0))
+        location = f"http://127.0.0.1:{self.http.server_port}/desc.xml"
+
+        def answer_searches():
+            while True:
+                try:
+                    _, sender = self.ssdp.recvfrom(4096)
+                    self.ssdp.sendto(f"HTTP/1.1 200 OK\r\nLOCATION: {location}\r\n\r\n".encode(), sender)
+                except OSError:
+                    return
+
+        threading.Thread(target=answer_searches, daemon=True).start()
+
+    def discover(self) -> upnp.Gateway:
+        return upnp.discover(timeout=0.3, target=self.ssdp.getsockname())
+
+    def close(self):
+        self.http.shutdown()
+        self.ssdp.close()
+
+
+def test_node_behind_a_box_opens_a_port_and_gets_verified(capsys, start, user):
+    # Alice écoute sur toutes les interfaces, derrière une box UPnP. Son nœud
+    # demande à la box d'ouvrir un port, en déduit son adresse publique, la
+    # fait vérifier par le relais (qui la rappelle), puis l'annonce. Bob, qui
+    # ne connaît que le relais, finit par joindre directement le nœud d'Alice.
+    # Une adresse IPv6 détectée mais injoignable n'est jamais annoncée.
+    box = FakeBox()
+    relay = start("relay", relay=True)
+    (alice, alice_key), (bob, _) = user("alice"), user("bob")
+    alice_node = Node(Home(alice), host="::", find_gateway=box.discover,
+                      find_ipv6=lambda: "2001:db8::1").start()
+    public = format_address(alice_key, "127.0.0.1", alice_node.port)
+    unreachable = format_address(alice_key, "2001:db8::1", alice_node.port)
+    assert box.mappings == {alice_node.port: "127.0.0.1"}
+    assert Home(alice).config()["candidates"] == [public, unreachable]
+
+    run(capsys, alice, "peers", "add", relay.address)
+    run(capsys, alice, "rate", BOOK, "1")
+    sync(Home(alice))
+    assert Home(alice).config()["addresses"] == [public]
+    assert Home(alice).config()["candidates"] == [unreachable]
+    run(capsys, alice, "rate", FILM, "-1")  # seulement sur son nœud
+
+    run(capsys, bob, "rate", alice_key, "1")
+    run(capsys, bob, "peers", "add", relay.address)
+    assert public in sync(Home(bob)).reached
+    assert local_score(capsys, bob, FILM) == -1
+
+    alice_node.stop()
+    assert box.mappings == {}
+    box.close()
+
+
+def test_friends_join_each_other_with_invitations(capsys, start, tmp_path):
+    # Alice fait tourner son nœud et envoie une invitation à Bob, qui l'accepte
+    # et lui renvoie la sienne. Sans rien configurer d'autre, chacun voit
+    # ensuite l'avis de l'autre, et désigne l'autre par son nom.
+    alice, bob = tmp_path / "alice", tmp_path / "bob"
+    run(capsys, alice, "init", "--name", "Alice")
+    run(capsys, bob, "init", "--name", "Bob")
+    start("alice")
+    run(capsys, bob, "join", run(capsys, alice, "invite"))
+    run(capsys, alice, "join", run(capsys, bob, "invite"))
+
+    run(capsys, alice, "rate", BOOK, "1")
+    assert score(capsys, bob, BOOK) == 1  # Bob interroge le nœud d'Alice
+
+    run(capsys, bob, "rate", FILM, "-1")
+    run(capsys, bob, "sync")  # publie sur le nœud d'Alice, qui fait confiance à Bob
+    assert local_score(capsys, alice, FILM) == -1
+
+    run(capsys, bob, "rate", "@Alice", "0.5")
+    assert Home(bob).store.note(entity_id(run(capsys, bob, "id")),
+                                entity_id(run(capsys, alice, "id"))).value == 0.5
+
+
+def test_spellings_of_one_url_designate_one_entity(capsys, user):
+    (home, _) = user("alice")
+    run(capsys, home, "rate", "https://Example.com:443/Page/#section", "1")
+    assert local_score(capsys, home, "https://example.com/Page") == 1
+    assert local_score(capsys, home, "https://example.com/page") == 0  # le chemin compte

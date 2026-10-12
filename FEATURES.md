@@ -138,6 +138,19 @@ en découle, puisqu'il est inutile de chercher des sources dont la certitude
 maximale resterait sous le seuil : 3 % → 5 pas, 1,5 % → 6 pas, 0,5 % → 7 pas
 (valeur actuelle, à resserrer quand on construira l'affichage).
 
+### Contacts et invitations
+Un carnet de contacts local, jamais publié, permet de désigner une personne
+par son nom (`@alice`) plutôt que par sa clé. On rejoint un ami avec son code
+d'invitation : il entre dans le carnet, on lui fait confiance, et ses adresses
+servent de points d'entrée dans le réseau.
+
+### Désignation des entités
+Une URL est normalisée avant d'être hachée, pour que ses différentes
+écritures désignent la même entité. Toute autre chaîne est hachée telle
+quelle, puisqu'on veut pouvoir noter des chaînes exactes (une modification
+Wikipédia, par exemple) : c'est aux utilisateurs de s'accorder sur une
+écriture pour les autres types (ISBN, lieux…).
+
 ### Note rapide
 Depuis une modale, l'utilisateur note en un geste. La pondération vaut alors 1
 par défaut.

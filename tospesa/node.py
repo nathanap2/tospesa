@@ -27,12 +27,17 @@ ses notes, pour que ses contacts sachent où les trouver même quand son nœud
 est éteint.
 """
 
+import base64
 import http.client
+import ipaddress
 import json
 import os
+import re
+import socket
 import ssl
 import threading
 import time
+import urllib.parse
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -49,6 +54,7 @@ from tospesa.protocol import (
     public_key_of,
     record_from_json,
 )
+from tospesa import upnp
 from tospesa.store import Store, Want
 
 TIMEOUT = 5.0
@@ -71,7 +77,15 @@ class _TLSServer(ThreadingHTTPServer):
 
     def __init__(self, address, handler, context: ssl.SSLContext):
         self._context = context
+        if ":" in address[0]:
+            self.address_family = socket.AF_INET6
         super().__init__(address, handler)
+
+    def server_bind(self):
+        if self.address_family == socket.AF_INET6:
+            # « :: » écoute à la fois en IPv6 et en IPv4.
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
 
     def finish_request(self, request, client_address):
         # La poignée de main TLS se fait dans le fil de la requête, pour qu'un
@@ -83,6 +97,8 @@ class _TLSServer(ThreadingHTTPServer):
             return
         try:
             super().finish_request(secure, client_address)
+        except (ConnectionError, TimeoutError, ssl.SSLError):
+            pass  # le client a coupé ou s'est tu : rien à lui répondre
         finally:
             secure.close()
 
@@ -132,9 +148,26 @@ def make_server(
 
     routes = {"/heads": heads, "/push": push, "/pull": pull, "/trace": trace}
 
+    def probe(body, client_ip):
+        # On ne rappelle que l'adresse IP d'où vient la demande : le serveur ne
+        # peut pas servir à sonder des machines tierces.
+        _, host, _ = parse_address(body["address"])
+        if client_ip.startswith("::ffff:"):
+            client_ip = client_ip[len("::ffff:"):]
+        if ipaddress.ip_address(host) != ipaddress.ip_address(client_ip):
+            return {"reachable": False}
+        try:
+            RemoteNode(body["address"]).heads([])
+        except Unreachable:
+            return {"reachable": False}
+        return {"reachable": True}
+
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
-            route = routes.get(self.path)
+            if self.path == "/probe":
+                route = lambda body: probe(body, self.client_address[0])  # noqa: E731
+            else:
+                route = routes.get(self.path)
             if route is None:
                 self.send_error(404)
                 return
@@ -144,10 +177,13 @@ def make_server(
                 return
             try:
                 body = json.loads(self.rfile.read(length))
-                with lock:
-                    store.refresh()
+                if self.path == "/probe":
                     reply = route(body)
-            except (ValueError, KeyError, TypeError) as error:
+                else:
+                    with lock:
+                        store.refresh()
+                        reply = route(body)
+            except (ValueError, KeyError, TypeError, InvalidRecord) as error:
                 self.send_error(400, str(error))
                 return
             data = json.dumps(reply).encode()
@@ -224,6 +260,10 @@ class RemoteNode:
                 self.rejected += 1
         return records
 
+    def probe(self, address: str) -> bool:
+        """Demande au nœud distant d'essayer de nous joindre à cette adresse."""
+        return bool(self._post("/probe", {"address": address})["reachable"])
+
     def heads(self, authors: list[str]) -> list[Want]:
         return [tuple(want) for want in self._post("/heads", {"authors": authors})["heads"]]
 
@@ -240,6 +280,23 @@ class RemoteNode:
 
 
 # --- dossier utilisateur ---------------------------------------------------
+
+INVITATION_PREFIX = "tospesa:"
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def normalize_url(url: str) -> str:
+    """Forme canonique d'une URL : schéma et domaine en minuscules, sans port
+    par défaut, sans fragment, sans « / » final. Le chemin et la requête sont
+    gardés tels quels (ils peuvent être sensibles à la casse)."""
+    parts = urllib.parse.urlsplit(url.strip())
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower()
+    if parts.port and parts.port != _DEFAULT_PORTS.get(scheme):
+        host = f"{host}:{parts.port}"
+    path = parts.path.rstrip("/")
+    return urllib.parse.urlunsplit((scheme, host, path, parts.query, ""))
+
 
 
 class Home:
@@ -284,7 +341,9 @@ class Home:
     def config(self) -> dict:
         path = self.path / "config.json"
         config = json.loads(path.read_text()) if path.exists() else {}
-        return {"peers": [], "address": None, "outbox": [], **config}
+        # addresses : adresses de son nœud, annoncées (données explicitement ou
+        # vérifiées par un pair) ; candidates : adresses détectées, à vérifier.
+        return {"peers": [], "addresses": [], "candidates": [], "outbox": [], **config}
 
     def update_config(self, **changes) -> None:
         config = {**self.config(), **changes}
@@ -296,12 +355,83 @@ class Home:
         if address not in peers:
             self.update_config(peers=[*peers, address])
 
+    # --- contacts et désignation des entités ---------------------------
+
+    def contacts(self) -> dict[str, str]:
+        """Carnet local : nom -> clé publique. Il n'est jamais publié."""
+        path = self.path / "contacts.json"
+        return json.loads(path.read_text()) if path.exists() else {}
+
+    def add_contact(self, name: str, key: str) -> None:
+        if not re.fullmatch(r"[0-9a-f]{64}", key):
+            raise SystemExit(f"clé mal formée : {key!r}")
+        contacts = self.contacts()
+        if contacts.get(name, key) != key:
+            raise SystemExit(f"le contact {name!r} existe déjà avec une autre clé")
+        contacts[name] = key
+        (self.path / "contacts.json").write_text(json.dumps(contacts, indent=2))
+
+    def target(self, entity: str) -> str:
+        """Empreinte de l'entité désignée par l'utilisateur :
+        - « @nom » : un contact du carnet (on note sa clé publique) ;
+        - une URL http(s) : normalisée, pour que ses différentes écritures
+          désignent la même entité ;
+        - toute autre chaîne : hachée telle quelle."""
+        if entity.startswith("@"):
+            key = self.contacts().get(entity[1:])
+            if key is None:
+                raise SystemExit(f"contact inconnu : {entity}")
+            return entity_id(key)
+        if re.match(r"https?://", entity, re.IGNORECASE):
+            return entity_id(normalize_url(entity))
+        return entity_id(entity)
+
+    # --- invitations ----------------------------------------------------
+
+    def invitation(self) -> str:
+        """Code à envoyer à un ami : sa clé, son nom, et les adresses où le
+        joindre (son nœud, et les pairs qu'il utilise)."""
+        me = self.identity()
+        config = self.config()
+        addresses = [*config["addresses"], *config["candidates"], *config["peers"]]
+        payload = {"key": me.public, "name": config.get("name"),
+                   "addresses": list(dict.fromkeys(addresses))}
+        encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+        return INVITATION_PREFIX + encoded.rstrip("=")
+
+    def join(self, invitation: str, name: str | None = None) -> str:
+        """Accepte une invitation : ajoute l'ami au carnet, lui fait
+        confiance, et prend ses adresses comme points d'entrée. Renvoie le nom
+        sous lequel il est enregistré."""
+        if not invitation.startswith(INVITATION_PREFIX):
+            raise SystemExit("ce n'est pas une invitation tospesa")
+        encoded = invitation[len(INVITATION_PREFIX):]
+        try:
+            payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+            key, addresses = payload["key"], payload["addresses"]
+            for address in addresses:
+                parse_address(address)
+        except (ValueError, KeyError, TypeError, InvalidRecord) as error:
+            raise SystemExit(f"invitation illisible : {error}") from error
+        name = name or payload.get("name")
+        if not name:
+            raise SystemExit("l'invitation ne donne pas de nom : préciser --as NOM")
+        if key == self.identity().public:
+            raise SystemExit("c'est ta propre invitation")
+        self.add_contact(name, key)
+        own = {*self.config()["addresses"], *self.config()["candidates"]}
+        for address in addresses:
+            if address not in own:
+                self.add_peer(address)
+        self.rate("@" + name, 1)
+        return name
+
     def rate(self, entity: str, value: float | None, weight: float = 1.0) -> None:
         """Note (ou retire sa note, si value est None) l'entité désignée par
-        sa chaîne d'identification."""
+        l'utilisateur (voir `target`)."""
         me = self.identity()
         self.store.refresh()
-        target = entity_id(entity)
+        target = self.target(entity)
         previous = self.store.note(me.id, target)
         timestamp = max(time.time_ns(), previous.timestamp + 1 if previous else 0)
         self.store.add(me.sign_note(target, value, weight, timestamp=timestamp))
@@ -323,7 +453,7 @@ def _refresh_announce(home: Home, me: Identity) -> bool:
     """Met à jour son annonce si ses adresses ont changé. Renvoie True si une
     nouvelle annonce a été signée."""
     config = home.config()
-    addresses = [config["address"]] if config["address"] else []
+    addresses = list(config["addresses"])
     addresses += [address for address in config["outbox"] if address not in addresses]
     addresses = addresses[:MAX_ADDRESSES]
     current = home.store.announce(me.id)
@@ -344,8 +474,8 @@ def _candidates(home: Home, me: Identity) -> list[str]:
         announce = home.store.announce(author)
         if announce:
             addresses += announce.addresses
-    own = config["address"]
-    return [address for address in dict.fromkeys(addresses) if address != own]
+    own = {*config["addresses"], *config["candidates"]}
+    return [address for address in dict.fromkeys(addresses) if address not in own]
 
 
 def _push_own(remote: RemoteNode, store: Store, me: Identity) -> bool:
@@ -392,6 +522,7 @@ def _visit_peers(
                 continue
             report.reached.append(address)
             report.rejected += remote.rejected
+            _verify_candidates(home, remote)
     home.update_config(outbox=accepting)
     if _refresh_announce(home, me):
         for address in accepting:
@@ -402,6 +533,24 @@ def _visit_peers(
     return report
 
 
+def _verify_candidates(home: Home, remote: RemoteNode) -> None:
+    """Fait vérifier par le pair les adresses détectées de son nœud : seules
+    celles où il parvient à le joindre seront annoncées."""
+    config = home.config()
+    verified = []
+    for candidate in config["candidates"]:
+        try:
+            if remote.probe(candidate):
+                verified.append(candidate)
+        except Unreachable:
+            return
+    if verified:
+        home.update_config(
+            addresses=[*config["addresses"], *verified],
+            candidates=[c for c in config["candidates"] if c not in verified],
+        )
+
+
 def sync(home: Home) -> SyncReport:
     """Publie ses enregistrements et récupère ceux de son voisinage de
     confiance auprès de tous les pairs joignables."""
@@ -409,15 +558,15 @@ def sync(home: Home) -> SyncReport:
     return _visit_peers(home, me, lambda remote: home.store.pull(remote, me.id))
 
 
-def lookup(home: Home, entity: str, limit: int | None = None) -> SyncReport:
+def lookup(home: Home, target: str, limit: int | None = None) -> SyncReport:
     """Recherche ciblée : demande à chaque pair joignable qui, dans son réseau
-    de confiance, a noté l'entité (désignée par sa chaîne), et récupère les
-    chaînes de notes correspondantes."""
+    de confiance, a noté l'entité (son empreinte), et récupère les chaînes de
+    notes correspondantes."""
     me = home.identity()
 
     def exchange(remote: RemoteNode) -> int:
         found = Store()
-        for note in remote.trace(me.id, entity_id(entity), limit):
+        for note in remote.trace(me.id, target, limit):
             found.add(note)
         return home.store.pull(found, me.id)
 
@@ -427,18 +576,41 @@ def lookup(home: Home, entity: str, limit: int | None = None) -> SyncReport:
 # --- nœud en fonctionnement ------------------------------------------------
 
 
+_WILDCARDS = ("", "::", "0.0.0.0")
+
+
+def global_ipv6() -> str | None:
+    """Adresse IPv6 publique de cette machine, s'il y en a une. (Se « connecter »
+    en UDP n'envoie aucun paquet : ça sert juste à choisir l'adresse source.)"""
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as probe:
+            probe.connect(("2001:4860:4860::8888", 53))
+            address = probe.getsockname()[0]
+    except OSError:
+        return None
+    return address if ipaddress.IPv6Address(address).is_global else None
+
+
 class Node:
     """Un nœud qui sert la copie d'un dossier : personnel, ou relais.
 
-    `public_host` / `public_port` : comment les autres joignent ce nœud, s'ils
-    diffèrent de l'interface d'écoute (machine derrière un routeur, etc.)."""
+    Ses adresses publiques :
+    - données explicitement (`public_host`, ou une interface d'écoute précise) :
+      annoncées telles quelles ;
+    - sinon, s'il écoute sur toutes les interfaces : détectées (ouverture de
+      port UPnP sur la box, adresse IPv6 publique), puis vérifiées par un pair
+      lors des synchronisations avant d'être annoncées. Un nœud que personne
+      ne peut joindre participe quand même : ses notes sont publiées chez ses
+      pairs."""
 
     def __init__(self, home: Home, host: str = "127.0.0.1", port: int = 0, *,
                  public_host: str | None = None, public_port: int | None = None,
-                 relay: bool = False):
+                 relay: bool = False,
+                 find_gateway: Callable[[], upnp.Gateway] = upnp.discover,
+                 find_ipv6: Callable[[], str | None] = global_ipv6):
         self.home = home
         self.relay = relay
-        identity = home.identity()
+        self.identity = identity = home.identity()
         if relay:
             accepted = lambda: None  # noqa: E731
         else:
@@ -451,13 +623,56 @@ class Node:
         self.server = make_server(
             home.store, identity, home.certificate(), host, port, accepted
         )
-        self.address = format_address(
-            identity.public, public_host or host, public_port or self.server.server_port
-        )
-        if not relay:
-            home.update_config(address=self.address)
-            _refresh_announce(home, identity)
+        self.port = self.server.server_port
+        self._public_port = public_port or self.port
+        self._find_gateway, self._find_ipv6 = find_gateway, find_ipv6
+        self._gateway: upnp.Gateway | None = None
+        self.upnp_error: str | None = None
+        if public_host or host not in _WILDCARDS:
+            self._given = [format_address(identity.public, public_host or host,
+                                          self._public_port)]
+        else:
+            self._given = []
+        self.refresh_reachability()
         self._thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    @property
+    def addresses(self) -> list[str]:
+        """Toutes les adresses connues de ce nœud, vérifiées ou non."""
+        return list(dict.fromkeys([*self._given, *self._detected]))
+
+    @property
+    def address(self) -> str:
+        if not self.addresses:
+            raise RuntimeError("ce nœud ne connaît aucune de ses adresses publiques")
+        return self.addresses[0]
+
+    def refresh_reachability(self) -> None:
+        """(Re)détecte ses adresses publiques et renouvelle l'ouverture de port.
+        Appelée au démarrage puis à chaque tour du nœud."""
+        detected = []
+        if not self._given:
+            try:
+                gateway = self._gateway or self._find_gateway()
+                gateway.add_mapping(self.port)
+                detected.append(format_address(self.identity.public,
+                                               gateway.external_ip(), self.port))
+                self._gateway, self.upnp_error = gateway, None
+            except upnp.UPnPError as error:
+                self._gateway, self.upnp_error = None, str(error)
+            ipv6 = self._find_ipv6()
+            if ipv6:
+                detected.append(format_address(self.identity.public, ipv6, self.port))
+        self._detected = detected
+        if self.relay:
+            return
+        config = self.home.config()
+        verified = [a for a in config["addresses"] if a in detected]
+        self.home.update_config(
+            addresses=[*self._given, *verified],
+            candidates=[a for a in detected if a not in verified],
+        )
+        _refresh_announce(self.home, self.identity)
 
     def start(self) -> "Node":
         self._thread.start()
@@ -466,6 +681,11 @@ class Node:
     def stop(self) -> None:
         self.server.shutdown()
         self.server.server_close()
+        if self._gateway is not None:
+            try:
+                self._gateway.delete_mapping(self.port)
+            except upnp.UPnPError:
+                pass  # la redirection expirera d'elle-même (bail d'une heure)
 
     def run_forever(self, interval: float, report: Callable[[SyncReport], None]) -> None:
         self.start()
@@ -473,6 +693,7 @@ class Node:
         # journal et relisent chacune ce que l'autre y ajoute.
         home = Home(self.home.path)
         while True:
+            self.refresh_reachability()
             if not self.relay:
                 report(sync(home))
             time.sleep(interval)

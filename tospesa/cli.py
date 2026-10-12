@@ -1,9 +1,11 @@
-"""Interface minimale en ligne de commande.
+"""Interface en ligne de commande.
 
-Chaque utilisateur a un dossier (--home) qui contient sa clé privée, sa
-configuration et sa copie locale des enregistrements : les siens et ceux de
-son voisinage de confiance. Les chaînes passées en argument sont hachées
-telles quelles ; pour noter une personne, on passe sa clé publique.
+Chaque utilisateur a un dossier (--home, par défaut ~/.tospesa) qui contient
+sa clé privée, sa configuration, son carnet de contacts et sa copie locale des
+enregistrements : les siens et ceux de son voisinage de confiance.
+
+Une entité se désigne par « @nom » (un contact), par une URL (normalisée), ou
+par n'importe quelle autre chaîne, hachée telle quelle.
 """
 
 import argparse
@@ -11,34 +13,43 @@ from pathlib import Path
 
 from tospesa.network import Opinion
 from tospesa.node import Home, Node, SyncReport, lookup, sync
-from tospesa.protocol import InvalidRecord, entity_id, record_from_json
+from tospesa.protocol import InvalidRecord, record_from_json
 from tospesa.store import Store
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tospesa")
-    parser.add_argument("--home", type=Path, default=Path.home() / ".tospesa")
+    parser.add_argument("--home", type=Path, default=Path.home() / ".tospesa",
+                        help="dossier de l'utilisateur (défaut : ~/.tospesa)")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("init", help="créer sa clé")
+    init = commands.add_parser("init", help="créer sa clé")
+    init.add_argument("--name", help="nom proposé à ceux que tu invites")
     commands.add_parser("id", help="afficher sa clé publique")
-    rate = commands.add_parser("rate", help="noter une entité")
-    rate.add_argument("entity")
+    commands.add_parser("invite", help="afficher un code d'invitation à envoyer à un ami")
+    join = commands.add_parser("join", help="accepter l'invitation d'un ami")
+    join.add_argument("invitation")
+    join.add_argument("--as", dest="name", help="nom sous lequel l'enregistrer")
+    commands.add_parser("contacts", help="afficher son carnet de contacts")
+    rate = commands.add_parser("rate", help="noter une entité (de -1 à 1)")
+    rate.add_argument("entity", help="@nom, URL, ou toute autre chaîne")
     rate.add_argument("value", type=float)
-    rate.add_argument("--weight", type=float, default=1.0)
+    rate.add_argument("--weight", type=float, default=1.0,
+                      help="à quel point tu engages ta note (de 0 exclu à 1)")
     commands.add_parser("unrate", help="retirer sa note").add_argument("entity")
     score = commands.add_parser("score", help="consulter son score")
-    score.add_argument("entity")
+    score.add_argument("entity", help="@nom, URL, ou toute autre chaîne")
     score.add_argument("--local", action="store_true", help="sans interroger le réseau")
     score.add_argument("--limit", type=int, default=None, help="nombre de notateurs cherchés")
     commands.add_parser("export", help="exporter sa copie").add_argument("file", type=Path)
     commands.add_parser("import", help="importer un fichier").add_argument("file", type=Path)
-    peers = commands.add_parser("peers", help="pairs connus (relais, nœuds)")
+    peers = commands.add_parser("peers", help="pairs connus (nœuds, relais)")
     peers.add_argument("action", nargs="?", choices=["add", "remove"])
     peers.add_argument("address", nargs="?", help="tsp://<clé>@hôte:port")
     commands.add_parser("sync", help="se synchroniser avec ses pairs")
     for name, label in (("node", "son nœud"), ("relay", "un relais")):
         server = commands.add_parser(name, help=f"faire tourner {label}")
-        server.add_argument("--host", default="127.0.0.1", help="interface d'écoute")
+        server.add_argument("--host", default="::",
+                            help="interface d'écoute (défaut : toutes, IPv4 et IPv6)")
         server.add_argument("--port", type=int, default=8470)
         server.add_argument("--public-host", help="hôte par lequel les autres le joignent")
         server.add_argument("--public-port", type=int, help="port par lequel les autres le joignent")
@@ -68,6 +79,20 @@ def _print_opinion(opinion: Opinion, origin: str) -> None:
     print(f"{opinion.value:+.2f}  ({detail} ; {origin})", flush=True)
 
 
+def _print_node_start(node: Node) -> None:
+    print(f"{'relais' if node.relay else 'nœud'} en écoute sur le port {node.port}")
+    for address in node.addresses:
+        print(f"  adresse : {address}")
+    if node.upnp_error is not None:
+        print(f"ouverture automatique de port sur la box impossible : {node.upnp_error}")
+    if not node.addresses:
+        print("aucune adresse publique : ton nœud ne sera sans doute pas joignable de "
+              "l'extérieur, mais tes notes seront publiées chez tes pairs joignables. "
+              f"Pour être joignable, redirige le port {node.port} (TCP) sur ta box et "
+              "relance avec --public-host <ton adresse publique>.")
+    print(flush=True)
+
+
 def main(argv: list[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     home = Home(args.home)
@@ -77,21 +102,37 @@ def main(argv: list[str] | None = None) -> None:
             home.create_identity()
         node = Node(home, args.host, args.port, public_host=args.public_host,
                     public_port=args.public_port, relay=args.command == "relay")
-        print(node.address, flush=True)
-        node.run_forever(args.interval, _print_report)
+        _print_node_start(node)
+        try:
+            node.run_forever(args.interval, _print_report)
+        except KeyboardInterrupt:
+            node.stop()
     elif args.command == "init":
-        print(home.create_identity().public)
+        identity = home.create_identity()
+        if args.name:
+            home.update_config(name=args.name)
+        print(identity.public)
     elif args.command == "id":
         print(home.identity().public)
+    elif args.command == "invite":
+        print(home.invitation())
+    elif args.command == "join":
+        name = home.join(args.invitation, args.name)
+        print(f"{name} est dans tes contacts (@{name}) et tu lui fais confiance.")
+        print(f"pour que {name} reçoive aussi tes notes, envoie-lui ton invitation "
+              "(tospesa invite).")
+    elif args.command == "contacts":
+        for name, key in sorted(home.contacts().items()):
+            print(f"@{name}  {key}")
     elif args.command == "rate":
         home.rate(args.entity, args.value, args.weight)
     elif args.command == "unrate":
         home.rate(args.entity, None)
     elif args.command == "score":
         me = home.identity()
-        target = entity_id(args.entity)
+        target = home.target(args.entity)
         _print_opinion(home.store.network().opinion(me.id, target), "copie locale")
-        if not args.local and lookup(home, args.entity, args.limit).reached:
+        if not args.local and lookup(home, target, args.limit).reached:
             _print_opinion(home.store.network().opinion(me.id, target), "réseau")
     elif args.command == "export":
         home.store.save(args.file)
